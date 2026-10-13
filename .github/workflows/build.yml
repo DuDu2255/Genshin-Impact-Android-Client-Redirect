@@ -23,6 +23,10 @@ on:
         description: "dispatch keyId"
         default: "4"
         required: true
+      hook:
+        description: "hook 模式：保留真域名(过 4214 校验)，注入 libyshook.so 把流量导向自建服"
+        default: "true"
+        required: false
       base_url:
         description: "官方原包直链（留空则改用下面的 base_tag 从 Release 下载）"
         default: "https://github.com/DuDu2255/Genshin-Impact-Android-Client-Redirect/releases/download/7.1.0/yuanshen_7.1.0.apk"
@@ -44,6 +48,7 @@ jobs:
       HOST: ${{ github.event.inputs.host || '127.0.0.1' }}
       PORT: ${{ github.event.inputs.port || '10086' }}
       KEYID: ${{ github.event.inputs.keyid || '4' }}
+      HOOK: ${{ github.event.inputs.hook || 'true' }}
       BASE_URL: ${{ github.event.inputs.base_url || 'https://github.com/DuDu2255/Genshin-Impact-Android-Client-Redirect/releases/download/7.1.0/yuanshen_7.1.0.apk' }}
       BASE_TAG: ${{ github.event.inputs.base_tag || 'base' }}
       KS_PASS: "yspatch123"
@@ -84,9 +89,15 @@ jobs:
         run: |
           BASE=$(ls base/*.apk | head -1)
           mkdir -p out
+          HOOKFLAG=""
+          if [ "$HOOK" = "true" ]; then
+            echo "== hook 模式：保留真域名，注入 patch/libs/libyshook.so =="
+            HOOKFLAG="--hook-so patch/libs/libyshook.so"
+          fi
           python3 patch/patch_apk.py \
             --in "$BASE" --out out/patched_unsigned.apk \
             --host "$HOST" --port "$PORT" --keyid "$KEYID" \
+            $HOOKFLAG \
             --java java \
             --baksmali patch/libs/baksmali.jar \
             --smali patch/libs/smali.jar \

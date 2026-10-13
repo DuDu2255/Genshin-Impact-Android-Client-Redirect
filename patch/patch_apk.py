@@ -24,6 +24,10 @@ BLK = "assets/20527480.blk"
 SERVER_ENV = "assets/server_env_config.json"
 DEXS = ["classes3.dex", "classes4.dex"]
 
+# 注入的 hook 库（保持真域名+https 不变，靠它把流量导向自建服）
+HOOK_SO_NAME = "libyshook.so"
+HOOK_SO_ZIP = "lib/arm64-v8a/" + HOOK_SO_NAME
+
 # 登录加密公钥：旧（米哈游官方）→ 新（AstaPS auth_public-key，模数 00cb2b60fc…）
 OLD_LOGIN_KEY = (
     b"MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDDvekdPMHN3AYhm/vktJT+YJr7cI5DcsNKqdsx5DZX0gDuWFuIjzdwButrIYPNmRJ1G8ybDIF7oDW2eEpm5sMbL9zs\n"
@@ -101,7 +105,37 @@ def patch_blk(raw, local, keyid):
 
 
 # ------------------------------------------------------------------ dex
-def patch_dex_domains(raw, workdir, java, baksmali, smali, local, label):
+def inject_hook_smali(smali_dir):
+    """在 com/unity3d/player/UnityPlayer.<clinit> 开头插入 System.loadLibrary("yshook")。"""
+    p = os.path.join(smali_dir, "com", "unity3d", "player", "UnityPlayer.smali")
+    if not os.path.isfile(p):
+        log("  !! 未找到 UnityPlayer.smali，跳过 hook 注入")
+        return False
+    t = open(p, encoding="utf-8", errors="surrogateescape").read()
+    if '"yshook"' in t:
+        return True
+    marker = ".method static constructor <clinit>()V"
+    i = t.find(marker)
+    if i < 0:
+        log("  !! 未找到 UnityPlayer.<clinit>")
+        return False
+    j = t.find(".registers", i)
+    k = t.find("\n", j)
+    m = re.search(r"\.registers (\d+)", t[j:k])
+    n = int(m.group(1)) if m else 0
+    if n < 1:                                     # 至少留 1 个寄存器给 v0
+        t = t[:j] + ".registers 1" + t[k:]
+        k = j + len(".registers 1")
+    ins = ('\n\n    const-string v0, "yshook"\n\n'
+           '    invoke-static {v0}, Lcom/unity3d/player/UnityPlayer;->loadLibraryStatic(Ljava/lang/String;)Z')
+    t = t[:k] + ins + t[k:]
+    open(p, "w", encoding="utf-8", errors="surrogateescape").write(t)
+    log('  UnityPlayer.<clinit>: 注入 System.loadLibrary("yshook")')
+    return True
+
+
+def patch_dex_domains(raw, workdir, java, baksmali, smali, local, label,
+                      inject_hook=False, do_domains=True):
     d = os.path.join(workdir, label + ".dex")
     o = os.path.join(workdir, label + ".smali")
     with open(d, "wb") as f:
@@ -109,24 +143,30 @@ def patch_dex_domains(raw, workdir, java, baksmali, smali, local, label):
     if os.path.isdir(o):
         shutil.rmtree(o)
     subprocess.run([java, "-jar", baksmali, "d", d, "-o", o], check=True)
-    pat = re.compile(r"https://[A-Za-z0-9._-]*(?:mihoyo|hoyoverse)\.com")
     files = hits = 0
-    for root, _, fs in os.walk(o):
-        for fn in fs:
-            if not fn.endswith(".smali"):
-                continue
-            p = os.path.join(root, fn)
-            with open(p, "r", encoding="utf-8", errors="surrogateescape") as f:
-                t = f.read()
-            h = len(pat.findall(t))
-            if h:
-                files += 1
-                hits += h
-                with open(p, "w", encoding="utf-8", errors="surrogateescape") as f:
-                    f.write(pat.sub(local, t))
+    if do_domains:
+        pat = re.compile(r"https://[A-Za-z0-9._-]*(?:mihoyo|hoyoverse)\.com")
+        for root, _, fs in os.walk(o):
+            for fn in fs:
+                if not fn.endswith(".smali"):
+                    continue
+                p = os.path.join(root, fn)
+                with open(p, "r", encoding="utf-8", errors="surrogateescape") as f:
+                    t = f.read()
+                h = len(pat.findall(t))
+                if h:
+                    files += 1
+                    hits += h
+                    with open(p, "w", encoding="utf-8", errors="surrogateescape") as f:
+                        f.write(pat.sub(local, t))
+    if inject_hook:
+        inject_hook_smali(o)
     out = os.path.join(workdir, label + "_new.dex")
     subprocess.run([java, "-jar", smali, "a", o, "-o", out], check=True)
-    log(f"  {label}: smali 域名替换 {files} 文件/{hits} 处 → 重汇编")
+    if do_domains:
+        log(f"  {label}: smali 域名替换 {files} 文件/{hits} 处 → 重汇编")
+    else:
+        log(f"  {label}: 仅注入/改密钥 → 重汇编")
     return open(out, "rb").read()
 
 
@@ -144,7 +184,7 @@ def patch_login_key(raw, label):
 
 
 # ------------------------------------------------------------------ zip 重打包
-def repack(src_apk, out_apk, replacements):
+def repack(src_apk, out_apk, replacements, additions=None):
     fin = open(src_apk, "rb")
     fin.seek(0, 2)
     size = fin.tell()
@@ -202,6 +242,19 @@ def repack(src_apk, out_apk, replacements):
             e["_c"] = (crc, len(comp_data), len(data))
             changed += 1
             log(f"  替换条目 {name}  {e['uncomp']} → {len(data)}B")
+    # 新增条目（本地头 + 数据），写在现有条目之后
+    add_cd = []
+    for name, data in (additions or {}).items():
+        nb = name.encode()
+        crc = zlib.crc32(data) & 0xFFFFFFFF
+        co = zlib.compressobj(9, zlib.DEFLATED, -15)
+        comp = co.compress(data) + co.flush()
+        off = fout.tell()
+        fout.write(struct.pack("<IHHHHHIIIHH", 0x04034B50, 20, 0, 8, 0, 0,
+                               crc, len(comp), len(data), len(nb), 0))
+        fout.write(nb); fout.write(comp)
+        add_cd.append((name, nb, crc, len(comp), len(data), off))
+        log(f"  新增条目 {name}  {len(data)}B")
     cd_new_off = fout.tell()
     for e, noff in zip(entries, new_offsets):
         rec = bytearray(e["raw"])
@@ -213,13 +266,19 @@ def repack(src_apk, out_apk, replacements):
             struct.pack_into("<I", rec, 24, u)
             struct.pack_into("<H", rec, 8, e["flags"] & ~0x08)
         fout.write(rec)
+    for (name, nb, crc, c, u, off) in add_cd:
+        rec = struct.pack("<IHHHHHHIIIHHHHHII", 0x02014B50, 20, 20, 0, 8, 0, 0,
+                          crc, c, u, len(nb), 0, 0, 0, 0, 0, off)
+        fout.write(rec); fout.write(nb)
     cd_new_size = fout.tell() - cd_new_off
     fin.seek(eocd_off + 22)
     comment = fin.read(com_len)
-    ne = bytearray(struct.pack("<IHHHHIIH", sig, disk, cd_disk, n_this, n_total, cd_new_size, cd_new_off, com_len))
+    ne = bytearray(struct.pack("<IHHHHIIH", sig, disk, cd_disk,
+                               n_this + len(add_cd), n_total + len(add_cd),
+                               cd_new_size, cd_new_off, com_len))
     fout.write(ne); fout.write(comment)
     fout.close(); fin.close()
-    log(f"重打包完成：{changed} 条替换，输出 {out_apk} ({os.path.getsize(out_apk)}B)")
+    log(f"重打包完成：{changed} 条替换 + {len(add_cd)} 条新增，输出 {out_apk} ({os.path.getsize(out_apk)}B)")
 
 
 # ------------------------------------------------------------------ main
@@ -234,10 +293,14 @@ def main():
     ap.add_argument("--baksmali", default="patch/libs/baksmali.jar")
     ap.add_argument("--smali", default="patch/libs/smali.jar")
     ap.add_argument("--workdir", default=None)
-    ap.add_argument("--no-dex", action="store_true", help="跳过 dex 域名替换")
+    ap.add_argument("--hook-so", default=None,
+                    help="hook 库路径；给出则走 hook 模式：保留真域名(过 4214)，"
+                         "只注入 libyshook.so + 换登录公钥，不动任何 URL")
+    ap.add_argument("--no-dex", action="store_true", help="跳过 dex 处理")
     ap.add_argument("--no-key", action="store_true", help="跳过登录公钥替换")
     args = ap.parse_args()
 
+    hook_mode = bool(args.hook_so)
     local = f"http://{args.host}:{args.port}"
     workdir = args.workdir or tempfile.mkdtemp(prefix="yspatch_")
     os.makedirs(workdir, exist_ok=True)
@@ -245,35 +308,48 @@ def main():
     z = zipfile.ZipFile(args.inp)
     names = set(z.namelist())
     repl = {}
+    additions = {}
 
-    log("== 1) blk ==")
-    if BLK in names:
-        repl[BLK] = patch_blk(z.read(BLK), local, args.keyid)
+    if hook_mode:
+        log("== hook 模式：保留真域名/https（过 4214），仅注入 hook + 换登录公钥 ==")
     else:
-        log("  !! 未找到", BLK)
+        log("== 1) blk ==")
+        if BLK in names:
+            repl[BLK] = patch_blk(z.read(BLK), local, args.keyid)
+        else:
+            log("  !! 未找到", BLK)
 
-    log("== 2) TextAsset ==")
-    if TEXTASSET in names:
-        repl[TEXTASSET] = replace_urls(z.read(TEXTASSET), local, "TextAsset")
+        log("== 2) TextAsset ==")
+        if TEXTASSET in names:
+            repl[TEXTASSET] = replace_urls(z.read(TEXTASSET), local, "TextAsset")
 
-    log("== 3) server_env_config.json ==")
-    if SERVER_ENV in names:
-        repl[SERVER_ENV] = replace_urls(z.read(SERVER_ENV), local, "server_env")
+        log("== 3) server_env_config.json ==")
+        if SERVER_ENV in names:
+            repl[SERVER_ENV] = replace_urls(z.read(SERVER_ENV), local, "server_env")
 
     log("== 4) dex ==")
-    for dn in DEXS:
+    dex_list = ["classes4.dex"] if hook_mode else DEXS
+    for dn in dex_list:
         if dn not in names:
             log("  !! 未找到", dn)
             continue
         raw = z.read(dn)
         if not args.no_dex:
-            raw = patch_dex_domains(raw, workdir, args.java, args.baksmali, args.smali, local, dn.replace(".", "_"))
+            raw = patch_dex_domains(raw, workdir, args.java, args.baksmali, args.smali,
+                                    local, dn.replace(".", "_"),
+                                    inject_hook=(hook_mode and dn == "classes4.dex"),
+                                    do_domains=not hook_mode)
         if dn == "classes4.dex" and not args.no_key:
             raw = patch_login_key(raw, dn)
         repl[dn] = raw
 
+    if hook_mode:
+        so = open(args.hook_so, "rb").read()
+        additions[HOOK_SO_ZIP] = so
+        log(f"== 注入 {HOOK_SO_ZIP} ({len(so)}B) ==")
+
     log("== 5) 重打包 ==")
-    repack(args.inp, args.out, repl)
+    repack(args.inp, args.out, repl, additions)
     log("完成 →", args.out)
 
 
