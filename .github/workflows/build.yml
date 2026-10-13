@@ -2,8 +2,10 @@ name: build-patched-apk
 
 # 云编译：从「官方原包」生成重定向改包 APK（已签名）
 #
-# 使用前提：把**未改动的官方原包**作为 Release 资源上传到 tag = base
-#   gh release create base ./官方原包.apk
+# 使用前提：提供**未改动的官方原包**，二选一：
+#   ① 直链（默认）：base_url 指向官方原包 .apk 的下载地址（Release 资源直链即可）
+#   ② Release tag：把官方原包作为 Release 资源上传到 tag = base_tag
+#      gh release create base ./官方原包.apk
 # 然后在此仓库 Actions 页面手动 Run workflow。
 
 on:
@@ -21,10 +23,14 @@ on:
         description: "dispatch keyId"
         default: "4"
         required: true
+      base_url:
+        description: "官方原包直链（留空则改用下面的 base_tag 从 Release 下载）"
+        default: "https://github.com/DuDu2255/Genshin-Impact-Android-Client-Redirect/releases/download/7.1.0/yuanshen_7.1.0.apk"
+        required: false
       base_tag:
-        description: "存放官方原包的 Release tag"
+        description: "存放官方原包的 Release tag（base_url 留空时生效）"
         default: "base"
-        required: true
+        required: false
   push:
     tags: ["build-*"]
 
@@ -38,6 +44,7 @@ jobs:
       HOST: ${{ github.event.inputs.host || '127.0.0.1' }}
       PORT: ${{ github.event.inputs.port || '10086' }}
       KEYID: ${{ github.event.inputs.keyid || '4' }}
+      BASE_URL: ${{ github.event.inputs.base_url || 'https://github.com/DuDu2255/Genshin-Impact-Android-Client-Redirect/releases/download/7.1.0/yuanshen_7.1.0.apk' }}
       BASE_TAG: ${{ github.event.inputs.base_tag || 'base' }}
       KS_PASS: "yspatch123"
 
@@ -58,13 +65,19 @@ jobs:
           python -m pip install --quiet lz4
           sudo apt-get update -qq && sudo apt-get install -y -qq unzip >/dev/null
 
-      - name: Download official base APK (Release asset)
+      - name: Download official base APK
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p base
-          gh release download "$BASE_TAG" --pattern "*.apk" --dir base --clobber \
-            || { echo "::error::未找到 Release tag=$BASE_TAG 下的 .apk。请先上传官方原包：gh release create $BASE_TAG 官方原包.apk"; exit 1; }
+          if [ -n "$BASE_URL" ]; then
+            echo "从直链下载官方原包：$BASE_URL"
+            curl -fL --retry 3 --retry-delay 5 -o base/yuanshen_base.apk "$BASE_URL"
+          else
+            echo "从 Release tag=$BASE_TAG 下载官方原包"
+            gh release download "$BASE_TAG" --pattern "*.apk" --dir base --clobber \
+              || { echo "::error::未找到 Release tag=$BASE_TAG 下的 .apk。请上传官方原包或改用 base_url。"; exit 1; }
+          fi
           ls -la base/
 
       - name: Patch APK

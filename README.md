@@ -202,15 +202,19 @@ userinfo 被忽略、host 仍是 127.0.0.1），或走 baksmali/smali 重汇编�
 仓库自带工作流 `.github/workflows/build.yml`：**从官方原包自动改包 + 签名**，产物发到 Release。
 
 ### 一次性准备
-1. 把**未改动的官方原包**上传成 Release 资源（tag = `base`）：
+原包来源二选一（工作流默认走**直链**）：
+1. **直链（默认）**：`base_url` 已预置为官方原包地址
+   `https://github.com/DuDu2255/Genshin-Impact-Android-Client-Redirect/releases/download/7.1.0/yuanshen_7.1.0.apk`
+   （Release tag `7.1.0` 的资源），无需额外准备。
+2. **Release tag**：把**未改动的官方原包**上传成 Release 资源（tag = `base`），并把 `base_url` 留空：
    ```bash
    gh release create base ./原神官方原包.apk
    ```
    （或 GitHub 网页 → Releases → Draft a new release，tag 填 `base`，附上 APK）
-2. `patch/`、`keystore/yspatch.keystore` 已在仓库中。
+3. `patch/`、`keystore/yspatch.keystore` 已在仓库中。
 
 ### 触发
-Actions → `build-patched-apk` → **Run workflow**，可填 `host` / `port` / `keyid` / `base_tag`。
+Actions → `build-patched-apk` → **Run workflow**，可填 `host` / `port` / `keyid` / `base_url` / `base_tag`。
 产物：`build-<n>` Release 里的**已签名改包 APK**（以及 Actions Artifact）。
 
 ### 签名
