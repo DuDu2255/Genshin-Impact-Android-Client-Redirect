@@ -1,0 +1,51 @@
+==================================================
+原神 7.1.0 登录重定向 v3 —— 修「ma-passport 解不开」
+==================================================
+
+【上一版(redirect2)为什么还登不上】
+  v2 已经让 dispatch 打到 10086 了（AstaPS 日志能看到 query_region_list），
+  但登录卡在这一步：
+     Ma-passport login request from: 127.0.0.1
+     ERROR RSADecryptionUtil: RSA decrypt: all methods failed (base64 len=172)
+     WARN  MaPassportAuthenticator: Unable to decrypt ma-passport account
+
+  原因：客户端登录界面（passport-sdk）在发送账号/密码前，会用一把
+  **写死在 dex 里的 RSA 公钥** 加密它们：
+     com/mihoyo/platform/account/sdk/utils/RSAUtils.smali
+       RSA_PUBLIC_KEY = "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDDvekdPMHN..."
+       encryptByPublicKey(data)  ← LoginManager 调用它加密账号+密码
+  这是米哈游官方的公钥，AstaPS 没有对应私钥 → 解不开 → 登录失败。
+
+【本次改了什么】
+  把 classes4.dex 里 RSAUtils 的这把公钥，**等长替换**成 AstaPS 自己的公钥
+  （AstaPS/src/main/resources/keys/auth_public-key.pem，
+   与 auth_private-key.der 是同一对，模数 00cb2b60fc…）。
+  长度完全一致（216 base64 字符 + 3 换行 = 219 字节），所以是原地字节替换，
+  所有偏移不变，只重算了 dex 头部 checksum/SHA1；string_ids 排序校验通过。
+
+  ⇒ 之后客户端用 AstaPS 的公钥加密，AstaPS 用 auth_private-key 就能解开，
+    能拿到真实用户名/密码（autoCreate=true，新名字自动建号）。
+
+【产出】
+  /sdcard/ys_patch/原神_7.1.0_redirect3_unsigned.apk  (513535783 字节, 未签名)
+    md5 = 7c174f5afa29e5337265bd18d4c7be18
+    相对 clone 包只替换 3 条：
+      assets/bin/Data/07134351...  (TextAsset, 3634 处 → 127.0.0.1:10086)
+      classes3.dex                 (域名 → 127.0.0.1:10086)
+      classes4.dex                 (域名 → 127.0.0.1:10086  +  登录公钥换成 AstaPS 的)
+
+【你要做的】
+  1) MT 管理器打开 原神_7.1.0_redirect3_unsigned.apk → 直接【签名】（别重新压缩）
+  2) **卸载**旧的（会清掉存档的官服账号，正好需要）→ 安装新包
+  3) 确认 AstaPS 在 127.0.0.1:10086 跑着
+  4) 用**任意用户名 + 任意密码**登录
+  5) 看 AstaPS 日志，成功的话应该是：
+       Ma-passport login request from: 127.0.0.1
+       User <你的用户名> has successfully logged in
+       [Combo] credential verification=true
+       [Dispatch] Client 127.0.0.1 request: query_cur_region/...
+     （不再出现 RSA decrypt ... failed）
+
+【若还失败】
+  把 AstaPS latest.log 里 ma-passport 那几行发我。
+  若报 Account not found → 换个用户名再试（或检查 autoCreate）。

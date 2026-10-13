@@ -1,0 +1,60 @@
+==================================================
+原神 7.1.0 登录重定向 v2  —— 修复“登录仍走官方”
+==================================================
+
+【上一版为什么没用】
+  上一版只改了 assets 里的配置（server_env_config.json / TextAsset / 20527480.blk），
+  但客户端真正用来拼登录地址的，是 dex 里硬编码的常量：
+    com/mihoyo/platform/account/sdk/PorteInfo.smali
+        loginBaseUrl = "https://passport-api.mihoyo.com"
+    com/mihoyo/platform/account/sdk/constant/SDKHost.smali
+    以及 classes3 里 combo/MDK SDK 的一批域名
+  这些在 dex 里是“常量字符串”，改配置覆盖不了它们。
+
+【为什么不能直接就地改字符串】
+  DEX 规范要求 string_ids 必须按 UTF-16 顺序排序，ART 会校验。
+  把 https:// 改成 http:// 会让字符串排序位置前移（':' < 's'），
+  触发 “Out-of-order string_ids” 校验失败 → 闪退。
+  所以本次是：baksmali 反编译 → 改 smali 里的域名 → smali 重新汇编成 dex。
+
+【本次改了什么】
+  classes3.dex  (8025308 -> 8035308 字节)：18 个文件 62 处域名
+  classes4.dex  (11277996 -> 11371084 字节)：13 个文件 130 处域名
+     全部 https://*.mihoyo.com / *.hoyoverse.com  ->  http://127.0.0.1:10086
+     路径原样保留。例如：
+       https://passport-api.mihoyo.com/account/ma-cn-passport/app/loginByPassword
+         ->  http://127.0.0.1:10086/account/ma-cn-passport/app/loginByPassword
+       （AstaPS 正好实现了这个路由，见 AuthenticationHandler.java）
+  assets/bin/Data/07134351e12778a4d9c727bb286b16c8   （TextAsset，已本地化）
+  assets/server_env_config.json 和 assets/20527480.blk 沿用你的 clone 包里已改好的版本
+
+  dex 结构校验：type/proto/field/method/class 数量与原版完全一致，
+  string_ids 排序通过，头部 checksum/SHA1 已重算。
+
+【产出文件】
+  /sdcard/ys_patch/原神_7.1.0_redirect2_unsigned.apk   (513535779 字节, 未签名)
+     md5 = 9deebdaa64da23c09526f066d67af9a0
+     只替换了 3 个条目，其余 1564 条与你的 clone 包逐字节一致。
+  /sdcard/ys_patch/classes3.dex   md5 = 8cdf9b03746ad773d23da995e73a9e4c
+  /sdcard/ys_patch/classes4.dex   md5 = 35cca1e1c09aa69ea01896b4bf80d4cd
+  /sdcard/ys_patch/07134351e12778a4d9c727bb286b16c8  （TextAsset）
+
+【你要做的】
+  1) 用 MT 管理器打开 原神_7.1.0_redirect2_unsigned.apk
+  2) 直接签名（MT 会去掉旧签名并重新 v1+v2+v3 签名）
+     —— 不要用“重新压缩/解压再压”的方式改包。
+  3) 卸载旧的，安装新签名包
+  4) 确认 AstaPS 在 127.0.0.1:10086 跑着
+  5) 启动，登录。看 AstaPS 控制台应该出现：
+       /account/ma-cn-passport/app/loginByPassword
+       /account/ma-cn-passport/token/verifySToken
+       [Dispatch] Client 127.0.0.1 request: query_region_list
+     （如果出现账号密码错误，先在 AstaPS 里注册一个账号）
+  6) 如果还连官方：用无线调试抓 logcat 发我，重点看
+       adb logcat | grep -iE "passport|mihoyo|hoyoverse|10086|UnknownHost|SSL"
+
+【已知取舍】
+  - 所有 user.mihoyo.com 的“忘记密码/注册/协议”网页链接也指向了 127.0.0.1，
+    这些页面 AstaPS 不提供，会 404。不影响登录和进游戏。
+  - 若登录界面是网页(webview)而不是原生 UI，则可能白屏；
+    目前看 SDK 自带原生登录 UI（assets/sdk/img/login_method_*），所以应该没问题。
