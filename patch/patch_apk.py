@@ -96,7 +96,7 @@ def patch_blk(raw, local, keyid):
         raise SystemExit("blk 新 URL 过长，无法等长")
     assert len(text2) == orig_len, "blk 长度不一致"
     payload = lz4.block.compress(bytes(text2), store_size=False)
-    log(f"  blk: dispatch → {local.decode()}, keyId={keyid}, payload {orig_len}B")
+    log(f"  blk: dispatch → {local}, keyId={keyid}, payload {orig_len}B")
     return raw[:HDR] + payload
 
 
