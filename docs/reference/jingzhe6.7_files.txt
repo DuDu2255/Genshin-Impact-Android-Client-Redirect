@@ -1,0 +1,33 @@
+惊蛰6.7.apk 全包改动清单（unzip -l）
+源包: /sdcard/ys_patch/惊蛰6.7.apk  (468,794,110 B)
+总条目: 1554 ；其中 1541 条时间戳 = 1981-01-01 01:01（原版未动）
+
+== 被新增/替换的条目（仅此 11 个）==
+大小        时间              路径
+9682784    2026-07-12 12:02  classes.dex
+169225     2026-07-12 12:08  assets/server_env_config.json
+1168       2026-07-12 13:03  assets/20527480.blk
+55656      2026-07-30 11:28  lib/arm64-v8a/libreadtoendhook.so   [新增]
+11265040   2026-07-30 11:48  classes4.dex
+7940596    2026-07-30 13:00  classes3.dex
+4230440    2026-07-30 15:02  lib/arm64-v8a/libclienthook.so      [新增]
+362797105  2026-07-30 15:07  lib/arm64-v8a/libyuanshen.so
+498508     2026-08-30 16:10  resources.arsc
+182376     2026-08-30 16:38  META-INF/MANIFEST.MF                [重签]
+182452     2026-08-30 16:38  META-INF/ANDROID.SF                 [重签]
+1722       2026-08-30 16:38  META-INF/ANDROID.RSA                [重签]
+
+== 关键“未改动”条目（证明改动面很小）==
+52236      1981-01-01 01:01  AndroidManifest.xml        (原版)
+3636       1981-01-01 01:01  classes2.dex               (原版)
+875816     1981-01-01 01:01  classes5.dex               (原版: RxJava/retrofit/okhttp/xcrash)
+48184      1981-01-01 01:01  lib/arm64-v8a/libxhook.so  (原版: iQiyi xhook 1.1.12)
+88088      1981-01-01 01:01  lib/arm64-v8a/libhpatchz.so(原版: 热更新)
+2643248    1981-01-01 01:01  lib/arm64-v8a/libMmoron.so (原版: 反外挂)
+3709112    1981-01-01 01:01  lib/arm64-v8a/libAPSE_7.0.1.so (原版: 支付宝安全SDK)
+827832     1981-01-01 01:01  lib/arm64-v8a/libAPSE_J.so     (原版: 支付宝安全SDK)
+
+== 说明 ==
+- 时间戳为 1981-01-01 01:01 的条目 = 原版打包时间（未动）。
+- 惊蛰未改 AndroidManifest（无新增 Activity/Service），未用 xhook 做 PLT hook。
+- 改动分三批：07-12 重定向(blk+端点表+classes.dex)；07-30 hook+公钥(2个.so+classes3/4.dex+libyuanshen)；08-30 改名+签名。

@@ -289,16 +289,21 @@ python3 patch/patch_apk.py --in 官方原包.apk --out 改包_unsigned.apk \
 
 ## 11. 参考包分析（惊蛰 6.7）
 
-> 📄 完整流程见 **[`docs/04_参考包_惊蛰6.7_流程.md`](docs/04_参考包_惊蛰6.7_流程.md)**
-> （含 `libreadtoendhook.so` 反汇编 `docs/ref-jingzhe6.7/libreadtoendhook.asm`、
-> 参考包 blk 样本 `samples/20527480.jingzhe6.7.blk`）。
+> 📄 **完整拆解见 [`docs/04_参考包_惊蛰6.7_流程.md`](docs/04_参考包_惊蛰6.7_流程.md)**
+> （逐条目改动清单、加载链、RSA 公钥替换的完整还原、重定向、签名）。
+> 材料：`docs/reference/libreadtoendhook.asm`、`docs/reference/jingzhe6.7_files.txt`、
+> `docs/reference/jingzhe6.7_rsa_keys.txt`、`samples/20527480.jingzhe6.7.blk`。
 
-别人的**改客户端**（非代理）完整方案，可作蓝本：
+别人的**改客户端**（非代理）完整方案，可作蓝本（**全包仅 11 个条目被改**）：
 
-- **加载方式**：改 `libyuanshen.so` 的 **DT_NEEDED** 加 `libclienthook.so`（链接器自动加载，免改 dex）。
-- **`libclienthook.so`**（4.2MB）：打包/加密的 hook 框架，由它拉起 `libreadtoendhook.so`。
-- **`libreadtoendhook.so`**（55KB，And64InlineHook）：**hook `libyuanshen.so` 的 `ReadToEnd`
-  （RVA `0x13d0d8ac`，6.7 专用）**，把返回的 CN 公钥字符串**原地替换成自己服务器的公钥**。
+- **加载方式**：改 `libyuanshen.so` 的 **DT_NEEDED**（第 0 项）加 `libclienthook.so`（链接器自动加载，免改 dex/manifest）。
+- **`libclienthook.so`**（4.2MB，NDK r21b）：**真正干活的 hook**——内联 And64InlineHook + 字符串 XOR 混淆，
+  自己 hook `libyuanshen.so` 的 `ReadToEnd`，把返回的 CN 公钥**原地**换成自建服公钥。
+- **`libreadtoendhook.so`**（55KB，NDK r25b）：作者**早期**的独立实现，**没有任何地方引用它**（dex/DT_NEEDED/libclienthook 里都搜不到）
+  ⇒ 被 `libclienthook.so` 取代后**忘删的死文件**。（上一版文档说"libclienthook 拉起它"是错的。）
+- **RSA 替换**：hook 判据 = 返回串 `length==415` 且首字符 `'<'` 且 == 原版 CN 公钥；
+  两把公钥都是 2048-bit 的 `<RSAKeyValue>` XML、**长度都恰好 415**（等长原地覆盖）。
+  原版 CN 公钥与替换公钥见 `docs/reference/jingzhe6.7_rsa_keys.txt`。
 - **blk**：`DispatchUrls=["http://sdk.yuanshen.org.cn/query_region_list"]`（**域名**），`keyId=3`。
 - **端点**：全部指向 `https://sdk.yuanshen.org.cn`（公网 IP `106.14.151.240`，阿里云）。
 - 推论：参考包用**公网域名**，很可能**没绕域名校验，只是服务端在公网**。
@@ -335,8 +340,12 @@ docs/
   01_替换说明.txt          v1：改 TextAsset + classes3/4.dex 域名
   02_登录重定向_v2.txt      v2：baksmali 改登录域名（dex 排序坑）
   03_登录公钥_v3.txt        v3：登录公钥等长替换（修 ma-passport）
-  04_参考包_惊蛰6.7_流程.md  参考方案（hook 改客户端）完整流程
-  ref-jingzhe6.7/         参考包材料（libreadtoendhook 反汇编、AndroidManifest）
+  04_参考包_惊蛰6.7_流程.md  参考方案（hook 改客户端）完整拆解
+  reference/              参考包材料：
+    libreadtoendhook.asm    反汇编（未 strip，含符号）
+    AndroidManifest.xml     参考包 manifest（原版未改）
+    jingzhe6.7_files.txt    全包改动清单（11 条 + 时间戳）
+    jingzhe6.7_rsa_keys.txt 两把 415 字符公钥 + 模数 hex + 混淆 key 表
 samples/
   20527480.orig.blk        原版 dispatch 配置 blk（无字典 LZ4）
   20527480.nip.blk         redirect4 用（nip.io 域名，等长）

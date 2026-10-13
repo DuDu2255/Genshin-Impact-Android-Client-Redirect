@@ -1,0 +1,39 @@
+惊蛰6.7 —— RSA 公钥替换所用的两把钥匙
+来源: lib/arm64-v8a/libclienthook.so (.data, XOR 混淆)
+      同一把自建服公钥也存在于 libreadtoendhook.so (.rodata, UTF-16 + 16B块乱序)
+
+两把钥匙都是 2048-bit RSA 的 <RSAKeyValue> XML，长度**恰好都是 415 字符**
+（原地等长覆盖的前提）。
+
+------------------------------------------------------------------
+[1] kCnOriginal —— 原版 CN 公钥（米哈游），libclienthook 里 XOR 0x42
+------------------------------------------------------------------
+<RSAKeyValue><Modulus>lCwdYrveozYYcKOSz4cjBfORvd6POZSxsM9JybWvTb9rr1qGhulgoNcMB0sUA4XnfNlt/aaT+JKSTEgynyX8of74Nmu70MRO2Nemi0YnI56gK2f0tIdmpFKnojgDTlLslQnKBzcK/elbcX2XE3FMK/hA2rkJBIMkIsXJ23nfWy/6KFB/nhXft+wzDahYmzaoLKsgq4xQInB6n0dUSkFNSMV+98CRjh+Y7pXlyEglDXxj+IhBVsl8s41c9vmgLHWS7feMufbeqko83fLv2GlI/aU0pvmYr9Lyf4kgPMp5aTqeyCm/ztb3bp5QoW7S2hlGP6gtxGr4s/lMpZN5YgTZbQ==</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>
+
+------------------------------------------------------------------
+[2] kCnReplacement —— 惊蛰自建服公钥，libclienthook 里 XOR 0x27
+------------------------------------------------------------------
+<RSAKeyValue><Modulus>njV3bvWBkg4LUjvI/Tgm/RZvgss62d4hbBhIoKSAUBbnoua/4oMfUgCrMEdYSeODll6qW2V7Y5u0KVpE+7FdexA2UFMWrl8Jzwgvf/o40tspKFm5wNqPARcPfACXh73AdnlM2ccCn0SsadbbTmrDAqZpC7eCp+/a9CyxrlQzSGkC5fmZjr3PRElF8btuPfZZCs0FYu/s6uf2ZXdK18N4YdN8pSIjesQ41XI7hM7Tw4YPE3T6wlA+Hj+Gccn7SKNgU+6mE1+B3ZGZZj/5KJv4kbXOHdFRNkWgY/KBXhGPtf4Gy2P+U2KxzfBvfU2jcZJHdg2WIgKrBxtbqqCg3c54Iw==</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>
+
+模数 hex (256 B / 2048-bit):
+9e35776ef581920e0b523bc8fd3826fd166f82cb3ad9de216c1848a0a4805016e7a2e6bfe2831f5200ab30475849e383965eaa5b657b639bb4295a44fbb15d7b1036505316ae5f09cf082f7ffa38d2db292859b9c0da8f01170f7c009787bdc076794cd9c7029f44ac69d6db4e6ac302a6690bb782a7efdaf42cb1ae5433486902e5f9998ebdcf444945f1bb6e3df6590acd0562efeceae7f665774ad7c37861d37ca522237ac438d5723b84ced3c3860f1374fac2503e1e3f8671c9fb48a36053eea6135f81dd9199663ff9289bf891b5ce1dd1513645a063f2815e118fb5fe06cb63fe5362b1cdf06f7d4da3719247760d962202ab071b5baaa0a0ddce7823
+
+------------------------------------------------------------------
+混淆 key 表（libclienthook.so .data 区, 0x408000..0x4084d0）
+------------------------------------------------------------------
+0x42  -> kCnOriginal（原版CN公钥）
+0x27  -> kCnReplacement（自建服公钥）
+0xd9  -> "libyuanshen.so"
+0x7f  -> "ReadToEnd", "ReadToEnd RVA or prologue does not match this libyuanshen.so build"
+0x98  -> "ReadToEnd hook active; first result length=%d, target CN public key not present"
+0x08  -> "/REPLACED", "PUBLIC", "OCCURRENCES", "TOTAL"
+
+其它硬编码：
+prologue 常量 fe0f1df8 f65701a9 f44f02a9  位于 libclienthook.so .rodata @0xb08
+  (str x30,[sp,#-0x30]! ; stp x22,x21,[sp,#0x10] ; stp x20,x19,[sp,#0x20])
+
+hook 判据（伪代码）:
+  obj = orig_ReadToEnd(...)
+  if obj != NULL and obj->length == 415 and obj->chars[0] == '<'
+       and memcmp(obj->chars, kCnOriginal, 415) == 0:
+        memcpy(obj->chars, kCnReplacement, 415*2)   // 原地等长覆盖
